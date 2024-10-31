@@ -153,64 +153,131 @@ if getgenv().Forbidden.AntiLock.Settings.Enable then
 end
 
 
+
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = game:GetService("Workspace").CurrentCamera
-local Mouse = LocalPlayer:GetMouse()
 local UserInputService = game:GetService("UserInputService")
-local isToggled = false  -- Used for toggle mode
+local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
--- Function to determine the appropriate hitbox distance based on the target's range
-local function getHitboxDistance(character)
-    local screenPos, onScreen = Camera:WorldToViewportPoint(character.PrimaryPart.Position)
-    local distanceFromPlayer = (LocalPlayer.Character.PrimaryPart.Position - character.PrimaryPart.Position).Magnitude
+local lastClickTime = 0
+local isToggled = false
 
-    if distanceFromPlayer > 100 then  -- Far range
-        return getgenv().Forbidden.TriggerBot.Settings.FarRangeHitbox
-    elseif distanceFromPlayer > 50 then  -- Mid range
-        return getgenv().Forbidden.TriggerBot.Settings.MidRangeHitbox
-    else  -- Close range
-        return getgenv().Forbidden.TriggerBot.Settings.HitboxDistance
+function Forlorn.mouse1click(x, y, delay)
+    x = x or 0
+    y = y or 0
+    delay = delay or 0.05
+
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, false)
+    task.wait(delay)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, false)
+
+    UserInputService.MouseIconEnabled = true
+end
+
+function Forlorn.sendMouseEvent(x, y, button, isPressed)
+    x = x or 0
+    y = y or 0
+    button = button or 0
+
+    VirtualInputManager:SendMouseButtonEvent(x, y, button, isPressed, game, false)
+    UserInputService.MouseIconEnabled = true
+end
+
+function Forlorn.mouse1press(x, y)
+    Forlorn.sendMouseEvent(x, y, 0, true)
+end
+
+function Forlorn.mouse1release(x, y)
+    Forlorn.sendMouseEvent(x, y, 0, false)
+end
+
+local function getMousePosition()
+    local mouse = UserInputService:GetMouseLocation()
+    return mouse.X, mouse.Y
+end
+
+local function isWithinBoxFOV(position)
+    local screenPos = Camera:WorldToViewportPoint(position)
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local fovHeight = getgenv().Forbidden.TriggerBot.Settings.BoxFOVSize.Height * 100
+    local fovWidth = getgenv().Forbidden.TriggerBot.Settings.BoxFOVSize.Width * 100
+
+    return (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude <= math.sqrt((fovHeight / 2)^2 + (fovWidth / 2)^2)
+end
+
+local function getPredictedPosition(character)
+    local primaryPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head")
+    if primaryPart then
+        local velocity = primaryPart.Velocity
+        local acceleration = primaryPart.AssemblyLinearVelocity - velocity
+        local predictionMultiplier = getgenv().Forbidden.TriggerBot.Settings.Preds.PredictionMultiplier
+        local timeToPredict = getgenv().Forbidden.TriggerBot.Settings.Preds.TimeToPredict or 0.1
+
+        -- Predictive calculation considering velocity and acceleration
+        local predictedPosition = primaryPart.Position + (velocity * timeToPredict * predictionMultiplier) + (0.5 * acceleration * (timeToPredict ^ 2))
+        
+        return predictedPosition
+    end
+    return nil
+end
+
+local function adjustAimForTarget(targetPosition)
+    local screenPosition, onScreen = Camera:WorldToViewportPoint(targetPosition)
+    if onScreen then
+        local centerX = Camera.ViewportSize.X / 2
+        local centerY = Camera.ViewportSize.Y / 2
+
+        local offsetX = screenPosition.X - centerX
+        local offsetY = screenPosition.Y - centerY
+
+        -- Adding calculated offset to center the aim at the target position
+        VirtualInputManager:SendMouseMoveEvent(centerX + offsetX, centerY + offsetY, game)
     end
 end
 
--- Function to check if the mouse is over any player's character
-local function isMouseOverCharacter(character)
-    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
-    local hitboxDistance = getHitboxDistance(character)
-
-    for _, part in pairs(character:GetChildren()) do
-        if part:IsA("BasePart") then
-            local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
-            local distanceToMouse = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-            if distanceToMouse < hitboxDistance then
-                return true
-            end
-        end
-    end
-    return false
-end
-
--- Function to handle shooting at all visible players
 local function TriggerBotAction()
-    for _, player in pairs(Players:GetPlayers()) do
+    for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local humanoid = player.Character:FindFirstChild("Humanoid")
-            if humanoid then
-                -- Check if the player is knocked down (health <= 0)
-                if humanoid.Health > 0 and isMouseOverCharacter(player.Character) then
-                    if UserInputService:GetFocusedTextBox() == nil then -- Check if no textbox is focused
-                        local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool") -- Find the equipped tool
+            if humanoid and humanoid.Health > 0 then
+                local currentTool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+                if getgenv().Forbidden.TriggerBot.Settings.Preds.Safety.IgnoreKnife and 
+                   (currentTool and (currentTool.Name:lower() == "knife" or currentTool.Name:lower() == "katana")) then
+                    continue
+                end
+
+                local bestPart, closestDistance = nil, math.huge
+                for _, partName in ipairs(getgenv().Forbidden.TriggerBot.Settings.Parts) do
+                    local part = player.Character:FindFirstChild(partName)
+                    if part then
+                        local distance = (part.Position - LocalPlayer.Character.PrimaryPart.Position).Magnitude
+                        if distance < closestDistance and isWithinBoxFOV(part.Position) then
+                            closestDistance, bestPart = distance, part
+                        end
+                    end
+                end
+
+                if bestPart then
+                    local predictedPosition = getPredictedPosition(player.Character)
+                    if predictedPosition and isWithinBoxFOV(predictedPosition) and os.clock() - lastClickTime >= getgenv().Forbidden.TriggerBot.Settings.Cooldown then
+                        lastClickTime = os.clock()
+                        
+                        -- Adjust aim to match target's predicted position
+                        adjustAimForTarget(predictedPosition)
+
+                        local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
                         if tool and tool:IsA("Tool") then
-                            local shootFunction = tool:FindFirstChild("Fire") -- Check for the tool's fire method
+                            local shootFunction = tool:FindFirstChild("Fire")
                             if shootFunction and shootFunction:IsA("RemoteEvent") then
-                                shootFunction:FireServer(player.Character) -- Fire at the player
+                                shootFunction:FireServer(player.Character)
                             else
-                                -- Use mouse press and release to simulate shooting
-                                mouse1press() -- Simulate mouse button press
-                                wait(math.random(getgenv().Forbidden.TriggerBot.Settings.MinDelay, getgenv().Forbidden.TriggerBot.Settings.MaxDelay))
-                                mouse1release() -- Simulate mouse button release
+                                local mouseX, mouseY = getMousePosition()
+                                Forlorn.mouse1press(mouseX, mouseY)
+                                Forlorn.mouse1release(mouseX, mouseY)
                             end
+                            return
                         end
                     end
                 end
@@ -219,39 +286,53 @@ local function TriggerBotAction()
     end
 end
 
--- Function to handle the mode (hold or toggle)
 local function handleShootingMode()
     if getgenv().Forbidden.TriggerBot.Settings.Mode == "toggle" then
-        if not isToggled then
-            isToggled = true
-            while isToggled do
-                TriggerBotAction()
-                wait(math.random(0.01, 0.015))  -- Slight delay to avoid blatant rapid fire
-            end
-        else
-            isToggled = false
-        end
-    else  -- 'hold' mode
-        while UserInputService:IsKeyDown(getgenv().Forbidden.TriggerBot.Keybinds.Shoot) do
-            TriggerBotAction()
-            wait(math.random(0.01, 0.015))  -- Slight delay for natural fire rate
-        end
+        isToggled = not isToggled
+    else
+        RunService:BindToRenderStep("TriggerBotHold", Enum.RenderPriority.Input.Value, TriggerBotAction)
     end
 end
 
--- Detect input to start/stop shooting
+-- Detect player's jump and perform the shooting action
+LocalPlayer.CharacterAdded:Connect(function(character)
+    local humanoid = character:WaitForChild("Humanoid")
+    humanoid.Jumping:Connect(function(isJumping)
+        if isJumping and isToggled then
+            TriggerBotAction()
+        end
+    end)
+end)
+
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if not gameProcessed and input.KeyCode == getgenv().Forbidden.TriggerBot.Keybinds.Shoot then
         handleShootingMode()
     end
 end)
 
--- Optional RenderStepped connection (can be removed if not needed)
-game:GetService("RunService").RenderStepped:Connect(function()
+UserInputService.InputEnded:Connect(function(input, gameProcessed)
+    if input.KeyCode == getgenv().Forbidden.TriggerBot.Keybinds.Shoot then
+        if getgenv().Forbidden.TriggerBot.Settings.Mode == "hold" then
+            RunService:UnbindFromRenderStep("TriggerBotHold")
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
     if getgenv().Forbidden.TriggerBot.Settings.Mode == "hold" and UserInputService:IsKeyDown(getgenv().Forbidden.TriggerBot.Keybinds.Shoot) then
         TriggerBotAction()
     end
 end)
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -500,52 +581,48 @@ Circle.Thickness = 1
 Circle.Filled = false
 
 
+
 local function UpdateFOV()
     if not Circle then return end
 
-    -- Safely set the Visible property without any warnings
-    if Circle.Visible then
-        Circle.Visible = Forbidden.CamLock.Normal.Radius_Visibility
-    end
-
+    Circle.Visible = Forbidden.CamLock.Normal.Radius_Visibility
     Circle.Radius = Forbidden.CamLock.Normal.Radius
     Circle.Position = Vector2.new(Mouse.X, Mouse.Y + game:GetService("GuiService"):GetGuiInset().Y)
 end
-
-
 
 RunService.RenderStepped:Connect(UpdateFOV)
 
 local function ClosestPlrFromMouse()
     local Target, Closest = nil, math.huge
 
-    for _, v in pairs(Players:GetPlayers()) do
-        if v ~= LocalPlayer and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
-            local Position, OnScreen = Camera:WorldToScreenPoint(v.Character.HumanoidRootPart.Position)
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local Position, OnScreen = Camera:WorldToScreenPoint(player.Character.HumanoidRootPart.Position)
             local Distance = (Vector2.new(Position.X, Position.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
 
             if Circle.Radius > Distance and Distance < Closest and OnScreen then
                 Closest = Distance
-                Target = v
+                Target = player
             end
         end
     end
     return Target
 end
 
+-- Function to get closest body part of a character
 local function GetClosestBodyPart(character)
     local ClosestDistance = math.huge
     local BodyPart = nil
 
     if character and character:IsDescendantOf(game.Workspace) then
-        for _, x in ipairs(character:GetChildren()) do
-            if x:IsA("BasePart") then
-                local Position, OnScreen = Camera:WorldToScreenPoint(x.Position)
+        for _, part in ipairs(character:GetChildren()) do
+            if part:IsA("BasePart") then
+                local Position, OnScreen = Camera:WorldToScreenPoint(part.Position)
                 if OnScreen then
                     local Distance = (Vector2.new(Position.X, Position.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
                     if Circle.Radius > Distance and Distance < ClosestDistance then
                         ClosestDistance = Distance
-                        BodyPart = x
+                        BodyPart = part
                     end
                 end
             end
@@ -554,9 +631,7 @@ local function GetClosestBodyPart(character)
     return BodyPart
 end
 
-local IsTargeting = false
-local TargetPlayer
-
+-- Key event to start/stop targeting
 Mouse.KeyDown:Connect(function(Key)
     if Key:lower() == Forbidden.CamLock.Normal.Keybind:lower() then
         if Forbidden.CamLock.Normal.Enabled then
@@ -575,7 +650,32 @@ Mouse.KeyDown:Connect(function(Key)
     end
 end)
 
+-- Function to check if the player is aligned with the camera
+local function IsAlignedWithCamera(targetPlayer)
+    if targetPlayer and targetPlayer.Character then
+        local targetPosition = targetPlayer.Character.HumanoidRootPart.Position
+        local cameraPosition = Camera.CFrame.Position
+        local direction = (targetPosition - cameraPosition).unit
 
+        local targetDirection = (Camera.CFrame.LookVector).unit
+
+        return direction:Dot(targetDirection) > 0.9 -- Check alignment (cosine similarity)
+    end
+    return false
+end
+
+-- TriggerBot functionality
+RunService.RenderStepped:Connect(function()
+    if TriggerBotEnabled and IsTargeting and TargetPlayer then
+        if IsAlignedWithCamera(TargetPlayer) then
+            -- Fire your trigger bot action here
+            -- Example: Fire a weapon
+            print("TriggerBot activated on: " .. TargetPlayer.Name)
+        end
+    end
+end)
+
+-- CamLock update camera position based on the targeted player
 RunService.RenderStepped:Connect(function()
     if IsTargeting and TargetPlayer and TargetPlayer.Character then
         local BodyPart
@@ -611,6 +711,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
+
 local G                   = game
 local Run_Service         = G:GetService("RunService")
 local Players             = G:GetService("Players")
@@ -640,7 +741,7 @@ local Games = {
     [2788229376] = {Name = "Da Hood", Argument = "UpdateMousePosI2", Remote = "MainEvent", BodyEffects = "K.O",},
     [16033173781] = {Name = "Da Hood Macro", Argument = "UpdateMousePosI2", Remote = "MainEvent", BodyEffects = "K.O",},
     [7213786345] = {Name = "Da Hood VC", Argument = "UpdateMousePosI", Remote = "MainEvent", BodyEffects = "K.O",},
-    [9825515356] = {Name = "Hood Customs", Argument = "GetMousePos", Remote = "MainEvent"},
+    [9825515356] = {Name = "Hood Customs", Argument = "GetPing", Remote = "MainEvent"},
     [5602055394] = {Name = "Hood Modded", Argument = "MousePos", Remote = "Bullets"},
     [17403265390] = {Name = "Da Downhill [PS/Xbox]", Argument = "MOUSE", Remote = "MAINEVENT"},
     [132023669786646] = {Name = "Da Bank", Argument = "MOUSE", Remote = "MAINEVENT"},
@@ -654,7 +755,7 @@ local Games = {
     [17780567699] = {Name = "Meko Hood", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
     [73033159436035] = {Name = "Da Craft", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
     [139379854239480] = {Name = "Dee Hood", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
-    [85317083713029] = {Name = "Da Kitty", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
+    [85317083713029] = {Name = "Da kitty", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
 }
 
 local gameId = game.PlaceId
@@ -949,19 +1050,15 @@ Run_Service.RenderStepped:Connect(function()
 
             local closestPart, closestPoint = GetClosestHitPoint(Target.Character)
             if closestPart and closestPoint then
-                if Forbidden.CamLock.Normal.mode == "hold" and holdingMouseButton then
-                    local velocity = GetVelocity(Target, closestPart.Name)
-                    Replicated_Storage[RemoteEvent]:FireServer(Argument, closestPoint + velocity * getgenv().Forbidden.Silent.Normal.Prediction)
-                elseif Forbidden.CamLock.Normal.mode == "toggle" then
-                    local velocity = GetVelocity(Target, closestPart.Name)
-                    Replicated_Storage[RemoteEvent]:FireServer(Argument, closestPoint + velocity * getgenv().Forbidden.Silent.Normal.Prediction)
-                end
+                local velocity = GetVelocity(Target, closestPart.Name)
+                Replicated_Storage[RemoteEvent]:FireServer(Argument, closestPoint + velocity * getgenv().Forbidden.Silent.Normal.Prediction)
             end
         end
     else
         Fov.Visible = false  -- Ensure FOV is hidden if not targeting
     end
 end)
+
 
 
 -- // Delayed Loop // --
