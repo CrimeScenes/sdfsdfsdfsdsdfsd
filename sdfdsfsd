@@ -164,7 +164,7 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local lastClickTime = 0
 local isToggled = false
 
--- Define all body parts to consider for shooting
+
 local AllBodyParts = {
     "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart", "LeftHand", "RightHand", 
     "LeftLowerArm", "RightLowerArm", "LeftUpperArm", "RightUpperArm", "LeftFoot", 
@@ -764,7 +764,7 @@ local Games = {
     [15186202290] = {Name = "Da Strike", Argument = "MOUSE", Remote = "MAINEVENT"},
     [17319408836] = {Name = "OG Da Hood", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
     [17780567699] = {Name = "Meko Hood", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
-    [73033159436035] = {Name = "Da Craft", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
+    [127504606438871] = {Name = "Da Craft", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
     [139379854239480] = {Name = "Dee Hood", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
     [85317083713029] = {Name = "Da kitty", Argument = "UpdateMousePos", Remote = "MainEvent", BodyEffects = "K.O",},
 }
