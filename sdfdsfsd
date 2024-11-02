@@ -164,6 +164,13 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local lastClickTime = 0
 local isToggled = false
 
+-- Define all body parts to consider for shooting
+local AllBodyParts = {
+    "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart", "LeftHand", "RightHand", 
+    "LeftLowerArm", "RightLowerArm", "LeftUpperArm", "RightUpperArm", "LeftFoot", 
+    "LeftLowerLeg", "LeftUpperLeg", "RightLowerLeg", "RightUpperLeg", "RightFoot"
+}
+
 function Forlorn.mouse1click(x, y, delay)
     x = x or 0
     y = y or 0
@@ -223,6 +230,20 @@ local function getPredictedPosition(character)
     return nil
 end
 
+local function findClosestPart(character)
+    local closestPart, closestDistance = nil, math.huge
+    for _, partName in ipairs(AllBodyParts) do
+        local part = character:FindFirstChild(partName)
+        if part then
+            local distance = (part.Position - LocalPlayer.Character.PrimaryPart.Position).Magnitude
+            if distance < closestDistance then
+                closestDistance, closestPart = distance, part
+            end
+        end
+    end
+    return closestPart
+end
+
 local function adjustAimForTarget(targetPosition)
     local screenPosition, onScreen = Camera:WorldToViewportPoint(targetPosition)
     if onScreen then
@@ -248,24 +269,14 @@ local function TriggerBotAction()
                     continue
                 end
 
-                local bestPart, closestDistance = nil, math.huge
-                for _, partName in ipairs(getgenv().Forbidden.TriggerBot.Settings.Parts) do
-                    local part = player.Character:FindFirstChild(partName)
-                    if part then
-                        local distance = (part.Position - LocalPlayer.Character.PrimaryPart.Position).Magnitude
-                        if distance < closestDistance and isWithinBoxFOV(part.Position) then
-                            closestDistance, bestPart = distance, part
-                        end
-                    end
-                end
-
-                if bestPart then
+                local closestPart = findClosestPart(player.Character)
+                if closestPart then
                     local predictedPosition = getPredictedPosition(player.Character)
                     if predictedPosition and isWithinBoxFOV(predictedPosition) and os.clock() - lastClickTime >= getgenv().Forbidden.TriggerBot.Settings.Cooldown then
                         lastClickTime = os.clock()
                         
-                        -- Adjust aim to match target's predicted position
-                        adjustAimForTarget(predictedPosition)
+                        -- Adjust aim to match the closest part
+                        adjustAimForTarget(closestPart.Position)
 
                         local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
                         if tool and tool:IsA("Tool") then
